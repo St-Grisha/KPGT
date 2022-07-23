@@ -2,10 +2,28 @@ import numpy as np
 import torch
 from rdkit import Chem
 import dgl
-from dgllife.utils.featurizers import ConcatFeaturizer, bond_type_one_hot, bond_is_conjugated, bond_is_in_ring, bond_stereo_one_hot, atomic_number_one_hot, atom_degree_one_hot, atom_formal_charge, atom_num_radical_electrons_one_hot, atom_hybridization_one_hot, atom_is_aromatic, atom_total_num_H_one_hot, atom_is_chiral_center, atom_chirality_type_one_hot, atom_mass
+from dgllife.utils.featurizers import (
+    ConcatFeaturizer,
+    bond_type_one_hot,
+    bond_is_conjugated,
+    bond_is_in_ring,
+    bond_stereo_one_hot,
+    atomic_number_one_hot,
+    atom_degree_one_hot,
+    atom_formal_charge,
+    atom_num_radical_electrons_one_hot,
+    atom_hybridization_one_hot,
+    atom_is_aromatic,
+    atom_total_num_H_one_hot,
+    atom_is_chiral_center,
+    atom_chirality_type_one_hot,
+    atom_mass,
+    one_hot_encoding,
+)
 from functools import partial
 from itertools import permutations
 import networkx as nx
+
 INF = 1e6
 VIRTUAL_ATOM_INDICATOR = -1
 VIRTUAL_ATOM_FEATURE_PLACEHOLDER = -1
@@ -13,25 +31,91 @@ VIRTUAL_BOND_FEATURE_PLACEHOLDER = -1
 VIRTUAL_PATH_INDICATOR = -INF
 
 N_ATOM_TYPES = 101
-N_BOND_TYPES = 5
-bond_featurizer_all = ConcatFeaturizer([ # 14
-    partial(bond_type_one_hot, encode_unknown=True), # 5
-    bond_is_conjugated, # 1
-    bond_is_in_ring, # 1
-    partial(bond_stereo_one_hot,encode_unknown=True) # 7
-    ])
-atom_featurizer_all = ConcatFeaturizer([ # 137
-    partial(atomic_number_one_hot, encode_unknown=True), #101
-    partial(atom_degree_one_hot, encode_unknown=True), # 12
-    atom_formal_charge, # 1
-    partial(atom_num_radical_electrons_one_hot, encode_unknown=True), # 6
-    partial(atom_hybridization_one_hot, encode_unknown=True), # 6
-    atom_is_aromatic, # 1
-    partial(atom_total_num_H_one_hot, encode_unknown=True), # 6
-    atom_is_chiral_center, # 1
-    atom_chirality_type_one_hot, # 2
-    atom_mass, # 1
-    ])
+N_BOND_TYPES = 6
+
+PERIODIC_TABLE = Chem.GetPeriodicTable()
+
+
+def period(atom):
+    atomic_num = atom.GetAtomicNum()
+    if atomic_num <= 2:
+        return 1
+    elif atomic_num <= 10:
+        return 2
+    elif atomic_num <= 18:
+        return 3
+    elif atomic_num <= 36:
+        return 4
+    elif atomic_num <= 54:
+        return 5
+    elif atomic_num <= 86:
+        return 6
+    else:
+        return 7
+
+
+def one_hot_period(atom, allowable_set=None, encode_unknown=False):
+    if allowable_set is None:
+        allowable_set = [1, 2, 3, 4, 5, 6, 7]
+    return one_hot_encoding(period(atom), allowable_set, encode_unknown)
+
+
+def one_hot_outer_elecs(atom, allowable_set=None, encode_unknown=False):
+    if allowable_set is None:
+        allowable_set = [1, 2, 3, 4, 5, 6, 7, 8]
+    return one_hot_encoding(
+        PERIODIC_TABLE.GetNOuterElecs(atom.GetAtomicNum()),
+        allowable_set,
+        encode_unknown,
+    )
+
+
+def get_rvdv(atom):
+    return [PERIODIC_TABLE.GetRvdw(atom.GetAtomicNum())]
+
+
+def get_rcov(atom):
+    return [PERIODIC_TABLE.GetRcovalent(atom.GetAtomicNum())]
+
+
+bond_featurizer_all = ConcatFeaturizer(
+    [  # 15
+        partial(
+            bond_type_one_hot,
+            allowable_set=[
+                Chem.rdchem.BondType.SINGLE,
+                Chem.rdchem.BondType.DOUBLE,
+                Chem.rdchem.BondType.TRIPLE,
+                Chem.rdchem.BondType.AROMATIC,
+                Chem.rdchem.BondType.DATIVE,
+            ],
+            encode_unknown=True,
+        ),  # 6
+        bond_is_conjugated,  # 1
+        bond_is_in_ring,  # 1
+        partial(bond_stereo_one_hot, encode_unknown=True),  # 7
+    ]
+)
+
+
+atom_featurizer_all = ConcatFeaturizer(
+    [  # 154
+        partial(atomic_number_one_hot, encode_unknown=True),  # 101
+        one_hot_period,  # 7
+        partial(one_hot_outer_elecs, encode_unknown=True),  # 8
+        partial(atom_degree_one_hot, encode_unknown=True),  # 12
+        atom_formal_charge,  # 1
+        partial(atom_num_radical_electrons_one_hot, encode_unknown=True),  # 6
+        partial(atom_hybridization_one_hot, encode_unknown=True),  # 6
+        atom_is_aromatic,  # 1
+        partial(atom_total_num_H_one_hot, encode_unknown=True),  # 6
+        atom_is_chiral_center,  # 1
+        atom_chirality_type_one_hot,  # 2
+        atom_mass,  # 1
+        get_rvdv,  # 1
+        get_rcov,  # 1
+    ]
+)
 
 
 class Vocab(object):
@@ -39,6 +123,7 @@ class Vocab(object):
         self.n_atom_types = n_atom_types
         self.n_bond_types = n_bond_types
         self.vocab = self.construct()
+
     def construct(self):
         vocab = {}
         # bonded Triplets
@@ -51,17 +136,18 @@ class Vocab(object):
                 vocab[atom_id_1][bond_id] = {}
                 for atom_id_2 in atom_ids:
                     if atom_id_2 >= atom_id_1:
-                        vocab[atom_id_1][bond_id][atom_id_2]=id
-                        id+=1
+                        vocab[atom_id_1][bond_id][atom_id_2] = id
+                        id += 1
         for atom_id in atom_ids:
             vocab[atom_id][999] = {}
             vocab[atom_id][999][999] = id
-            id+=1
+            id += 1
         vocab[999] = {}
         vocab[999][999] = {}
         vocab[999][999][999] = id
         self.vocab_size = id
         return vocab
+
     def index(self, atom_type1, atom_type2, bond_type):
         atom_type1, atom_type2 = np.sort([atom_type1, atom_type2])
         try:
@@ -69,14 +155,20 @@ class Vocab(object):
         except Exception as e:
             print(e)
             return self.vocab_size
-    def one_hot_feature_index(self, atom_type_one_hot1, atom_type_one_hot2, bond_type_one_hot):
-        atom_type1, atom_type2 = np.sort([atom_type_one_hot1.index(1),atom_type_one_hot2.index(1)]).tolist()
+
+    def one_hot_feature_index(
+        self, atom_type_one_hot1, atom_type_one_hot2, bond_type_one_hot
+    ):
+        atom_type1, atom_type2 = np.sort(
+            [atom_type_one_hot1.index(1), atom_type_one_hot2.index(1)]
+        ).tolist()
         bond_type = bond_type_one_hot.index(1)
         return self.index([atom_type1, bond_type, atom_type2])
 
+
 def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loop=True):
-    d_atom_feats = 137
-    d_bond_feats = 14
+    d_atom_feats = 154
+    d_bond_feats = 15
     # Canonicalize
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -86,38 +178,59 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
     # Featurize Atoms
     n_atoms = mol.GetNumAtoms()
     atom_features = []
-    
+
     for atom_id in range(n_atoms):
         atom = mol.GetAtomWithIdx(atom_id)
         atom_features.append(atom_featurizer_all(atom))
-    atomIDPair_to_tripletId = np.ones(shape=(n_atoms,n_atoms))*np.nan
+    atomIDPair_to_tripletId = np.ones(shape=(n_atoms, n_atoms)) * np.nan
     # Construct and Featurize Triplet Nodes
     ## bonded atoms
     triplet_labels = []
     virtual_atom_and_virtual_node_labels = []
-    
+
     atom_pairs_features_in_triplets = []
     bond_features_in_triplets = []
-    
+
     bonded_atoms = set()
     triplet_id = 0
     for bond in mol.GetBonds():
-        begin_atom_id, end_atom_id = np.sort([bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()])
-        atom_pairs_features_in_triplets.append([atom_features[begin_atom_id], atom_features[end_atom_id]])
+        begin_atom_id, end_atom_id = np.sort(
+            [bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()]
+        )
+        atom_pairs_features_in_triplets.append(
+            [atom_features[begin_atom_id], atom_features[end_atom_id]]
+        )
         bond_feature = bond_featurizer_all(bond)
         bond_features_in_triplets.append(bond_feature)
         bonded_atoms.add(begin_atom_id)
         bonded_atoms.add(end_atom_id)
-        triplet_labels.append(vocab.index(atom_features[begin_atom_id][:N_ATOM_TYPES].index(1), atom_features[end_atom_id][:N_ATOM_TYPES].index(1), bond_feature[:N_BOND_TYPES].index(1)))
+        triplet_labels.append(
+            vocab.index(
+                atom_features[begin_atom_id][:N_ATOM_TYPES].index(1),
+                atom_features[end_atom_id][:N_ATOM_TYPES].index(1),
+                bond_feature[:N_BOND_TYPES].index(1),
+            )
+        )
         virtual_atom_and_virtual_node_labels.append(0)
-        atomIDPair_to_tripletId[begin_atom_id,end_atom_id] = atomIDPair_to_tripletId[end_atom_id,begin_atom_id] = triplet_id
+        atomIDPair_to_tripletId[begin_atom_id, end_atom_id] = atomIDPair_to_tripletId[
+            end_atom_id, begin_atom_id
+        ] = triplet_id
         triplet_id += 1
-    ## unbonded atoms 
+    ## unbonded atoms
     for atom_id in range(n_atoms):
         if atom_id not in bonded_atoms:
-            atom_pairs_features_in_triplets.append([atom_features[atom_id], [VIRTUAL_ATOM_FEATURE_PLACEHOLDER]*d_atom_feats])
-            bond_features_in_triplets.append([VIRTUAL_BOND_FEATURE_PLACEHOLDER]*d_bond_feats)
-            triplet_labels.append(vocab.index(atom_features[atom_id][:N_ATOM_TYPES].index(1),999,999))
+            atom_pairs_features_in_triplets.append(
+                [
+                    atom_features[atom_id],
+                    [VIRTUAL_ATOM_FEATURE_PLACEHOLDER] * d_atom_feats,
+                ]
+            )
+            bond_features_in_triplets.append(
+                [VIRTUAL_BOND_FEATURE_PLACEHOLDER] * d_bond_feats
+            )
+            triplet_labels.append(
+                vocab.index(atom_features[atom_id][:N_ATOM_TYPES].index(1), 999, 999)
+            )
             virtual_atom_and_virtual_node_labels.append(VIRTUAL_ATOM_INDICATOR)
     # Construct and Featurize Paths between Triplets
     ## line graph paths
@@ -131,29 +244,42 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
         node_ids = atomIDPair_to_tripletId[i]
         node_ids = node_ids[~np.isnan(node_ids)]
         if len(node_ids) >= 2:
-            new_edges = list(permutations(node_ids,2))
+            new_edges = list(permutations(node_ids, 2))
             edges.extend(new_edges)
-            new_paths = [[new_edge[0]]+[VIRTUAL_PATH_INDICATOR]*(max_length-2)+[new_edge[1]] for new_edge in new_edges]
+            new_paths = [
+                [new_edge[0]]
+                + [VIRTUAL_PATH_INDICATOR] * (max_length - 2)
+                + [new_edge[1]]
+                for new_edge in new_edges
+            ]
             paths.extend(new_paths)
             n_new_edges = len(new_edges)
-            line_graph_path_labels.extend([1]*n_new_edges)
-            mol_graph_path_labels.extend([0]*n_new_edges)
-            virtual_path_labels.extend([0]*n_new_edges)
-            self_loop_labels.extend([0]*n_new_edges)
+            line_graph_path_labels.extend([1] * n_new_edges)
+            mol_graph_path_labels.extend([0] * n_new_edges)
+            virtual_path_labels.extend([0] * n_new_edges)
+            self_loop_labels.extend([0] * n_new_edges)
     # # molecule graph paths
     adj_matrix = np.array(Chem.rdmolops.GetAdjacencyMatrix(mol))
     nx_g = nx.from_numpy_array(adj_matrix)
-    paths_dict = dict(nx.algorithms.all_pairs_shortest_path(nx_g,max_length+1))
+    paths_dict = dict(nx.algorithms.all_pairs_shortest_path(nx_g, max_length + 1))
     for i in paths_dict.keys():
         for j in paths_dict[i]:
             path = paths_dict[i][j]
             path_length = len(path)
-            if 3 < path_length <= max_length+1:
-                triplet_ids = [atomIDPair_to_tripletId[path[pi], path[pi+1]] for pi in range(len(path)-1)]
+            if 3 < path_length <= max_length + 1:
+                triplet_ids = [
+                    atomIDPair_to_tripletId[path[pi], path[pi + 1]]
+                    for pi in range(len(path) - 1)
+                ]
                 path_start_triplet_id = triplet_ids[0]
                 path_end_triplet_id = triplet_ids[-1]
                 triplet_path = triplet_ids[1:-1]
-                triplet_path = [path_start_triplet_id]+triplet_path+[VIRTUAL_PATH_INDICATOR]*(max_length-len(triplet_path)-2)+[path_end_triplet_id]
+                triplet_path = (
+                    [path_start_triplet_id]
+                    + triplet_path
+                    + [VIRTUAL_PATH_INDICATOR] * (max_length - len(triplet_path) - 2)
+                    + [path_end_triplet_id]
+                )
                 paths.append(triplet_path)
                 edges.append([path_start_triplet_id, path_end_triplet_id])
                 line_graph_path_labels.append(0)
@@ -161,39 +287,54 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
                 virtual_path_labels.append(0)
                 self_loop_labels.append(0)
     for n in range(n_virtual_nodes):
-        for i in range(len(atom_pairs_features_in_triplets)-n):
+        for i in range(len(atom_pairs_features_in_triplets) - n):
             edges.append([len(atom_pairs_features_in_triplets), i])
             edges.append([i, len(atom_pairs_features_in_triplets)])
-            paths.append([len(atom_pairs_features_in_triplets)]+[VIRTUAL_PATH_INDICATOR]*(max_length-2)+[i])
-            paths.append([i]+[VIRTUAL_PATH_INDICATOR]*(max_length-2)+[len(atom_pairs_features_in_triplets)])
-            line_graph_path_labels.extend([0,0])
-            mol_graph_path_labels.extend([0,0])
-            virtual_path_labels.extend([n+1,n+1])
-            self_loop_labels.extend([0,0])
-        atom_pairs_features_in_triplets.append([[VIRTUAL_ATOM_FEATURE_PLACEHOLDER]*d_atom_feats, [VIRTUAL_ATOM_FEATURE_PLACEHOLDER]*d_atom_feats])
-        bond_features_in_triplets.append([VIRTUAL_BOND_FEATURE_PLACEHOLDER]*d_bond_feats)
-        triplet_labels.append(vocab.index(999,999,999))
-        virtual_atom_and_virtual_node_labels.append(n+1)
+            paths.append(
+                [len(atom_pairs_features_in_triplets)]
+                + [VIRTUAL_PATH_INDICATOR] * (max_length - 2)
+                + [i]
+            )
+            paths.append(
+                [i]
+                + [VIRTUAL_PATH_INDICATOR] * (max_length - 2)
+                + [len(atom_pairs_features_in_triplets)]
+            )
+            line_graph_path_labels.extend([0, 0])
+            mol_graph_path_labels.extend([0, 0])
+            virtual_path_labels.extend([n + 1, n + 1])
+            self_loop_labels.extend([0, 0])
+        atom_pairs_features_in_triplets.append(
+            [
+                [VIRTUAL_ATOM_FEATURE_PLACEHOLDER] * d_atom_feats,
+                [VIRTUAL_ATOM_FEATURE_PLACEHOLDER] * d_atom_feats,
+            ]
+        )
+        bond_features_in_triplets.append(
+            [VIRTUAL_BOND_FEATURE_PLACEHOLDER] * d_bond_feats
+        )
+        triplet_labels.append(vocab.index(999, 999, 999))
+        virtual_atom_and_virtual_node_labels.append(n + 1)
     if add_self_loop:
         for i in range(len(atom_pairs_features_in_triplets)):
             edges.append([i, i])
-            paths.append([i]+[VIRTUAL_PATH_INDICATOR]*(max_length-2)+[i])
+            paths.append([i] + [VIRTUAL_PATH_INDICATOR] * (max_length - 2) + [i])
             line_graph_path_labels.append(0)
             mol_graph_path_labels.append(0)
             virtual_path_labels.append(0)
             self_loop_labels.append(1)
     edges = np.array(edges, dtype=np.int64)
-    data = (edges[:,0], edges[:,1])
+    data = (edges[:, 0], edges[:, 1])
     g = dgl.graph(data)
-    g.ndata['begin_end'] = torch.FloatTensor(atom_pairs_features_in_triplets)
-    g.ndata['edge'] = torch.FloatTensor(bond_features_in_triplets)
-    g.ndata['label'] = torch.LongTensor(triplet_labels)
-    g.ndata['vavn'] = torch.LongTensor(virtual_atom_and_virtual_node_labels)
-    g.edata['path'] = torch.LongTensor(paths)
-    g.edata['lgp'] = torch.BoolTensor(line_graph_path_labels)
-    g.edata['mgp'] = torch.BoolTensor(mol_graph_path_labels)
-    g.edata['vp'] = torch.BoolTensor(virtual_path_labels)
-    g.edata['sl'] = torch.BoolTensor(self_loop_labels)
+    g.ndata["begin_end"] = torch.FloatTensor(atom_pairs_features_in_triplets)
+    g.ndata["edge"] = torch.FloatTensor(bond_features_in_triplets)
+    g.ndata["label"] = torch.LongTensor(triplet_labels)
+    g.ndata["vavn"] = torch.LongTensor(virtual_atom_and_virtual_node_labels)
+    g.edata["path"] = torch.LongTensor(paths)
+    g.edata["lgp"] = torch.BoolTensor(line_graph_path_labels)
+    g.edata["mgp"] = torch.BoolTensor(mol_graph_path_labels)
+    g.edata["vp"] = torch.BoolTensor(virtual_path_labels)
+    g.edata["sl"] = torch.BoolTensor(self_loop_labels)
     return g
 
 
@@ -209,35 +350,48 @@ def smiles_to_graph_tune(smiles, max_length=5, n_virtual_nodes=8, add_self_loop=
     # Featurize Atoms
     n_atoms = mol.GetNumAtoms()
     atom_features = []
-    
+
     for atom_id in range(n_atoms):
         atom = mol.GetAtomWithIdx(atom_id)
         atom_features.append(atom_featurizer_all(atom))
-    atomIDPair_to_tripletId = np.ones(shape=(n_atoms,n_atoms))*np.nan
+    atomIDPair_to_tripletId = np.ones(shape=(n_atoms, n_atoms)) * np.nan
     # Construct and Featurize Triplet Nodes
     ## bonded atoms
     virtual_atom_and_virtual_node_labels = []
-    
+
     atom_pairs_features_in_triplets = []
     bond_features_in_triplets = []
-    
+
     bonded_atoms = set()
     triplet_id = 0
     for bond in mol.GetBonds():
-        begin_atom_id, end_atom_id = np.sort([bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()])
-        atom_pairs_features_in_triplets.append([atom_features[begin_atom_id], atom_features[end_atom_id]])
+        begin_atom_id, end_atom_id = np.sort(
+            [bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()]
+        )
+        atom_pairs_features_in_triplets.append(
+            [atom_features[begin_atom_id], atom_features[end_atom_id]]
+        )
         bond_feature = bond_featurizer_all(bond)
         bond_features_in_triplets.append(bond_feature)
         bonded_atoms.add(begin_atom_id)
         bonded_atoms.add(end_atom_id)
         virtual_atom_and_virtual_node_labels.append(0)
-        atomIDPair_to_tripletId[begin_atom_id,end_atom_id] = atomIDPair_to_tripletId[end_atom_id,begin_atom_id] = triplet_id
+        atomIDPair_to_tripletId[begin_atom_id, end_atom_id] = atomIDPair_to_tripletId[
+            end_atom_id, begin_atom_id
+        ] = triplet_id
         triplet_id += 1
-    ## unbonded atoms 
+    ## unbonded atoms
     for atom_id in range(n_atoms):
         if atom_id not in bonded_atoms:
-            atom_pairs_features_in_triplets.append([atom_features[atom_id], [VIRTUAL_ATOM_FEATURE_PLACEHOLDER]*d_atom_feats])
-            bond_features_in_triplets.append([VIRTUAL_BOND_FEATURE_PLACEHOLDER]*d_bond_feats)
+            atom_pairs_features_in_triplets.append(
+                [
+                    atom_features[atom_id],
+                    [VIRTUAL_ATOM_FEATURE_PLACEHOLDER] * d_atom_feats,
+                ]
+            )
+            bond_features_in_triplets.append(
+                [VIRTUAL_BOND_FEATURE_PLACEHOLDER] * d_bond_feats
+            )
             virtual_atom_and_virtual_node_labels.append(VIRTUAL_ATOM_INDICATOR)
     # Construct and Featurize Paths between Triplets
     ## line graph paths
@@ -251,30 +405,43 @@ def smiles_to_graph_tune(smiles, max_length=5, n_virtual_nodes=8, add_self_loop=
         node_ids = atomIDPair_to_tripletId[i]
         node_ids = node_ids[~np.isnan(node_ids)]
         if len(node_ids) >= 2:
-            new_edges = list(permutations(node_ids,2))
+            new_edges = list(permutations(node_ids, 2))
             edges.extend(new_edges)
-            new_paths = [[new_edge[0]]+[VIRTUAL_PATH_INDICATOR]*(max_length-2)+[new_edge[1]] for new_edge in new_edges]
+            new_paths = [
+                [new_edge[0]]
+                + [VIRTUAL_PATH_INDICATOR] * (max_length - 2)
+                + [new_edge[1]]
+                for new_edge in new_edges
+            ]
             paths.extend(new_paths)
             n_new_edges = len(new_edges)
-            line_graph_path_labels.extend([1]*n_new_edges)
-            mol_graph_path_labels.extend([0]*n_new_edges)
-            virtual_path_labels.extend([0]*n_new_edges)
-            self_loop_labels.extend([0]*n_new_edges)
+            line_graph_path_labels.extend([1] * n_new_edges)
+            mol_graph_path_labels.extend([0] * n_new_edges)
+            virtual_path_labels.extend([0] * n_new_edges)
+            self_loop_labels.extend([0] * n_new_edges)
     # # molecule graph paths
     adj_matrix = np.array(Chem.rdmolops.GetAdjacencyMatrix(mol))
     nx_g = nx.from_numpy_array(adj_matrix)
-    paths_dict = dict(nx.algorithms.all_pairs_shortest_path(nx_g,max_length+1))
+    paths_dict = dict(nx.algorithms.all_pairs_shortest_path(nx_g, max_length + 1))
     for i in paths_dict.keys():
         for j in paths_dict[i]:
             path = paths_dict[i][j]
             path_length = len(path)
-            if 3 < path_length <= max_length+1:
-                triplet_ids = [atomIDPair_to_tripletId[path[pi], path[pi+1]] for pi in range(len(path)-1)]
+            if 3 < path_length <= max_length + 1:
+                triplet_ids = [
+                    atomIDPair_to_tripletId[path[pi], path[pi + 1]]
+                    for pi in range(len(path) - 1)
+                ]
                 path_start_triplet_id = triplet_ids[0]
                 path_end_triplet_id = triplet_ids[-1]
                 triplet_path = triplet_ids[1:-1]
                 # assert [path_start_triplet_id,path_end_triplet_id] not in edges
-                triplet_path = [path_start_triplet_id]+triplet_path+[VIRTUAL_PATH_INDICATOR]*(max_length-len(triplet_path)-2)+[path_end_triplet_id]
+                triplet_path = (
+                    [path_start_triplet_id]
+                    + triplet_path
+                    + [VIRTUAL_PATH_INDICATOR] * (max_length - len(triplet_path) - 2)
+                    + [path_end_triplet_id]
+                )
                 paths.append(triplet_path)
                 edges.append([path_start_triplet_id, path_end_triplet_id])
                 line_graph_path_labels.append(0)
@@ -282,35 +449,50 @@ def smiles_to_graph_tune(smiles, max_length=5, n_virtual_nodes=8, add_self_loop=
                 virtual_path_labels.append(0)
                 self_loop_labels.append(0)
     for n in range(n_virtual_nodes):
-        for i in range(len(atom_pairs_features_in_triplets)-n):
+        for i in range(len(atom_pairs_features_in_triplets) - n):
             edges.append([len(atom_pairs_features_in_triplets), i])
             edges.append([i, len(atom_pairs_features_in_triplets)])
-            paths.append([len(atom_pairs_features_in_triplets)]+[VIRTUAL_PATH_INDICATOR]*(max_length-2)+[i])
-            paths.append([i]+[VIRTUAL_PATH_INDICATOR]*(max_length-2)+[len(atom_pairs_features_in_triplets)])
-            line_graph_path_labels.extend([0,0])
-            mol_graph_path_labels.extend([0,0])
-            virtual_path_labels.extend([n+1,n+1])
-            self_loop_labels.extend([0,0])
-        atom_pairs_features_in_triplets.append([[VIRTUAL_ATOM_FEATURE_PLACEHOLDER]*d_atom_feats, [VIRTUAL_ATOM_FEATURE_PLACEHOLDER]*d_atom_feats])
-        bond_features_in_triplets.append([VIRTUAL_BOND_FEATURE_PLACEHOLDER]*d_bond_feats)
-        virtual_atom_and_virtual_node_labels.append(n+1)
+            paths.append(
+                [len(atom_pairs_features_in_triplets)]
+                + [VIRTUAL_PATH_INDICATOR] * (max_length - 2)
+                + [i]
+            )
+            paths.append(
+                [i]
+                + [VIRTUAL_PATH_INDICATOR] * (max_length - 2)
+                + [len(atom_pairs_features_in_triplets)]
+            )
+            line_graph_path_labels.extend([0, 0])
+            mol_graph_path_labels.extend([0, 0])
+            virtual_path_labels.extend([n + 1, n + 1])
+            self_loop_labels.extend([0, 0])
+        atom_pairs_features_in_triplets.append(
+            [
+                [VIRTUAL_ATOM_FEATURE_PLACEHOLDER] * d_atom_feats,
+                [VIRTUAL_ATOM_FEATURE_PLACEHOLDER] * d_atom_feats,
+            ]
+        )
+        bond_features_in_triplets.append(
+            [VIRTUAL_BOND_FEATURE_PLACEHOLDER] * d_bond_feats
+        )
+        virtual_atom_and_virtual_node_labels.append(n + 1)
     if add_self_loop:
         for i in range(len(atom_pairs_features_in_triplets)):
             edges.append([i, i])
-            paths.append([i]+[VIRTUAL_PATH_INDICATOR]*(max_length-2)+[i])
+            paths.append([i] + [VIRTUAL_PATH_INDICATOR] * (max_length - 2) + [i])
             line_graph_path_labels.append(0)
             mol_graph_path_labels.append(0)
             virtual_path_labels.append(0)
             self_loop_labels.append(1)
     edges = np.array(edges, dtype=np.int64)
-    data = (edges[:,0], edges[:,1])
+    data = (edges[:, 0], edges[:, 1])
     g = dgl.graph(data)
-    g.ndata['begin_end'] = torch.FloatTensor(atom_pairs_features_in_triplets)
-    g.ndata['edge'] = torch.FloatTensor(bond_features_in_triplets)
-    g.ndata['vavn'] = torch.LongTensor(virtual_atom_and_virtual_node_labels)
-    g.edata['path'] = torch.LongTensor(paths)
-    g.edata['lgp'] = torch.BoolTensor(line_graph_path_labels)
-    g.edata['mgp'] = torch.BoolTensor(mol_graph_path_labels)
-    g.edata['vp'] = torch.BoolTensor(virtual_path_labels)
-    g.edata['sl'] = torch.BoolTensor(self_loop_labels)
+    g.ndata["begin_end"] = torch.FloatTensor(atom_pairs_features_in_triplets)
+    g.ndata["edge"] = torch.FloatTensor(bond_features_in_triplets)
+    g.ndata["vavn"] = torch.LongTensor(virtual_atom_and_virtual_node_labels)
+    g.edata["path"] = torch.LongTensor(paths)
+    g.edata["lgp"] = torch.BoolTensor(line_graph_path_labels)
+    g.edata["mgp"] = torch.BoolTensor(mol_graph_path_labels)
+    g.edata["vp"] = torch.BoolTensor(virtual_path_labels)
+    g.edata["sl"] = torch.BoolTensor(self_loop_labels)
     return g

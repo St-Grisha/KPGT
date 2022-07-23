@@ -35,6 +35,7 @@ import pandas as pd
 import pandas_flavor as pf
 import sys
 import numpy as np
+
 # set to 0 to disable caching
 MAX_CACHE = 0
 
@@ -50,6 +51,7 @@ ZERO_DEPTH_BASES = (str, bytes, Number, range, bytearray)
 def getsize(obj_0):
     """Recursively iterate to sum size of object & members."""
     _seen_ids = set()
+
     def inner(obj):
         obj_id = id(obj)
         if obj_id in _seen_ids:
@@ -57,22 +59,27 @@ def getsize(obj_0):
         _seen_ids.add(obj_id)
         size = sys.getsizeof(obj)
         if isinstance(obj, ZERO_DEPTH_BASES):
-            pass # bypass remaining control flow and return
+            pass  # bypass remaining control flow and return
         elif isinstance(obj, (tuple, list, Set, deque)):
             size += sum(inner(i) for i in obj)
-        elif isinstance(obj, Mapping) or hasattr(obj, 'items'):
-            size += sum(inner(k) + inner(v) for k, v in getattr(obj, 'items')())
+        elif isinstance(obj, Mapping) or hasattr(obj, "items"):
+            size += sum(inner(k) + inner(v) for k, v in getattr(obj, "items")())
         # Check for custom object instances - may subclass above too
-        if hasattr(obj, '__dict__'):
+        if hasattr(obj, "__dict__"):
             size += inner(vars(obj))
-        if hasattr(obj, '__slots__'): # can have __slots__ with __dict__
-            size += sum(inner(getattr(obj, s)) for s in obj.__slots__ if hasattr(obj, s))
+        if hasattr(obj, "__slots__"):  # can have __slots__ with __dict__
+            size += sum(
+                inner(getattr(obj, s)) for s in obj.__slots__ if hasattr(obj, s)
+            )
         return size
+
     return inner(obj_0)
+
 
 class DescriptorGenerator:
     REGISTRY = {}
     NAME = None
+
     def __init__(self):
         try:
             self.REGISTRY[self.NAME.lower()] = self
@@ -85,7 +92,7 @@ class DescriptorGenerator:
         self.cache = {}
         self.cache_hit = 0
         self.cache_miss = 0
-        
+
     def molFromSmiles(self, smiles):
         """Prepare a smiles to a molecule"""
         return Chem.MolFromSmiles(smiles)
@@ -93,21 +100,21 @@ class DescriptorGenerator:
     def molFromMol(self, mol):
         """Do any internal preperation required from a user-mol"""
         return mol
-    
+
     def GetColumns(self):
         """Returns [(name, numpy.dtype), ...] for all columns being computed"""
         if self.NAME:
-            return [ (self.NAME + "_calculated", numpy.bool) ] + self.columns
+            return [(self.NAME + "_calculated", numpy.bool)] + self.columns
         return self.columns
 
     def calculateMol(self, m, smiles, internalParsing):
         """Override me for the actual calculation"""
         raise NotImplementedError
-    
+
     def processMol(self, m, smiles, internalParsing=False):
         """rdmol, smiles -> result
         generate descriptors from a smiles string using the specified
-        properties.  
+        properties.
 
         Takes the molecule as-is.  Calling this directly requires the User
         to properly prepare the molecule
@@ -126,19 +133,23 @@ class DescriptorGenerator:
             logging.error("None in res")
             columns = self.GetColumns()
 
-            for idx,v in enumerate(res):
+            for idx, v in enumerate(res):
                 if v is None:
                     if self.NAME:
-                        logging.error("At least one result: %s(%s) failed: %s",
-                                      self.NAME,
-                                      columns[idx+1][0],
-                                      smiles)
-                        res[idx] = columns[idx+1][1]() # default value here
+                        logging.error(
+                            "At least one result: %s(%s) failed: %s",
+                            self.NAME,
+                            columns[idx + 1][0],
+                            smiles,
+                        )
+                        res[idx] = columns[idx + 1][1]()  # default value here
                     else:
-                        logging.error("At least one result: %s failed: %s",
-                                      columns[idx][0],
-                                      smiles)
-                        res[idx] = columns[idx][1]() # default value here
+                        logging.error(
+                            "At least one result: %s failed: %s",
+                            columns[idx][0],
+                            smiles,
+                        )
+                        res[idx] = columns[idx][1]()  # default value here
 
             logging.info("res %r", res)
             if type(res) == list:
@@ -152,7 +163,7 @@ class DescriptorGenerator:
                 np.insert(res, 0, -1)
 
         return res
-    
+
     def processMols(self, mols, smiles, internalParsing=False):
         """mols, smiles -> results
         Process the molecules.  Note that smiles
@@ -162,15 +173,18 @@ class DescriptorGenerator:
         if internalParsing is False, takes the molecules as-is.  Otherwise
         the molecule was prepared by the DescriptorGenerator by calling the appropriate
         translation function (i.e. molFromSmiles) (e.g. used for consistently
-        ordering input for MoKa descriptors)  
+        ordering input for MoKa descriptors)
 
         Calling this directly requires the User to properly prepare the molecules if necessary
         """
         if len(mols) != len(smiles):
-            raise ValueError("Number of molecules does not match number of unparsed molecules")
+            raise ValueError(
+                "Number of molecules does not match number of unparsed molecules"
+            )
 
-        result = [self.processMol(m, smile, internalParsing)
-                  for m, smile in zip(mols, smiles)]
+        result = [
+            self.processMol(m, smile, internalParsing) for m, smile in zip(mols, smiles)
+        ]
         assert len(result) == len(mols)
         return result
 
@@ -179,7 +193,7 @@ class DescriptorGenerator:
         returns None for invalid smiles strings
 
         generate descriptors from a smiles string using the specified
-        properties.  
+        properties.
 
         Default is to return morgan3 folded counts clipped to 255 and
         use rdkit 2D properties.
@@ -204,8 +218,8 @@ class DescriptorGenerator:
         _results = []
 
         if MAX_CACHE:
-            for i,smile in enumerate(smiles):
-                res,m = self.cache.get(smile, (None, None))
+            for i, smile in enumerate(smiles):
+                res, m = self.cache.get(smile, (None, None))
                 if res:
                     _results.append((i, res))
                     if keep_mols:
@@ -219,7 +233,7 @@ class DescriptorGenerator:
                     if keep_mols:
                         allmols.append(m)
         else:
-            for i,smile in enumerate(smiles):
+            for i, smile in enumerate(smiles):
                 m = self.molFromSmiles(smile)
                 if m:
                     mols.append(m)
@@ -227,15 +241,15 @@ class DescriptorGenerator:
                     goodsmiles.append(smile)
                 if keep_mols:
                     allmols.append(m)
-                        
+
         if len(smiles) + len(self.cache) > MAX_CACHE:
             self.cache.clear()
-            
+
         # all cached
         if len(_results) == len(smiles):
             all_results = [r[1] for r in _results]
             return allmols, all_results
-        
+
         # none cached
         elif len(_results) == 0:
             results = self.processMols(mols, goodsmiles, internalParsing=True)
@@ -244,13 +258,13 @@ class DescriptorGenerator:
                 if len(indices) == len(smiles):
                     for smile, res, m in zip(smiles, results, allmols):
                         self.cache[smile] = res, m
-                    
+
                 return mols, results
 
             # default values are None
             all_results = [None] * len(smiles)
-            for idx,result,m in zip(indices, results, allmols):
-                self.cache[smiles[idx]] = result,m
+            for idx, result, m in zip(indices, results, allmols):
+                self.cache[smiles[idx]] = result, m
                 all_results[idx] = result
             return allmols, all_results
         # some cached
@@ -258,22 +272,23 @@ class DescriptorGenerator:
             results = self.processMols(mols, goodsmiles, internalParsing=True)
             all_results = [None] * len(smiles)
             # grab cached
-            for i,res in _results:
+            for i, res in _results:
                 all_results[i] = res
 
             # grab processed
-            for idx,result,m in zip(indices, results, allmols):
+            for idx, result, m in zip(indices, results, allmols):
                 if MAX_CACHE:
-                    self.cache[smiles[idx]] = result,m
+                    self.cache[smiles[idx]] = result, m
                 all_results[idx] = result
             return allmols, all_results
 
     def processCtab(self, ctab):
         raise NotImplementedError
-    
+
     def processSDF(self, sdf):
         raise NotImplementedError
-        
+
+
 class Container(DescriptorGenerator):
     def __init__(self, generators):
         self.generators = generators
@@ -285,29 +300,29 @@ class Container(DescriptorGenerator):
     def processMol(self, m, smiles, internalParsing=False):
         results = []
         for g in self.generators:
-            results.extend(g.processMol(m,smiles, internalParsing))
-            
+            results.extend(g.processMol(m, smiles, internalParsing))
+
         return results
 
     def processMols(self, mols, smiles, internalParsing=False):
         results = []
         for m in mols:
             results.append([])
-            
+
         for g in self.generators:
-            for result, newresults in zip(results,
-                                          g.processMols(mols,smiles,
-                                                        internalParsing)):
+            for result, newresults in zip(
+                results, g.processMols(mols, smiles, internalParsing)
+            ):
                 result.extend(newresults)
         return results
-    
 
-def MakeGenerator( generator_names ):
+
+def MakeGenerator(generator_names):
     """Make a descriptor generator by combining multiple generators
 
-      :param generator_names: list of available generator names
+    :param generator_names: list of available generator names
 
-      :result: DescriptorGenerator
+    :result: DescriptorGenerator
     """
     if not len(generator_names):
         logging.warning("MakeGenerator called with no generator names")
@@ -318,9 +333,10 @@ def MakeGenerator( generator_names ):
             d = DescriptorGenerator.REGISTRY[name.lower()]
             generators.append(d)
         except:
-            logging.exception("No DescriptorGenerator found named %s\nCurrently registered descriptors:\n\t%s",
-                              name,
-                              "\n\t".join(sorted(DescriptorGenerator.REGISTRY.keys()))
+            logging.exception(
+                "No DescriptorGenerator found named %s\nCurrently registered descriptors:\n\t%s",
+                name,
+                "\n\t".join(sorted(DescriptorGenerator.REGISTRY.keys())),
             )
             raise
     if len(generators) > 1:
@@ -328,10 +344,9 @@ def MakeGenerator( generator_names ):
     if len(generators):
         return generators[0]
 
+
 @pf.register_dataframe_method
-def create_descriptors(df: pd.DataFrame,
-                       mols_column_name: str,
-                       generator_names: list):
+def create_descriptors(df: pd.DataFrame, mols_column_name: str, generator_names: list):
     """pyjanitor style function for using the descriptor generator
 
     Convert a column of smiles strings or RDKIT Mol objects into Descriptors.

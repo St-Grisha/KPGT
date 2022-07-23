@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import dgl
 
+
 def set_random_seed(seed=22, n_threads=16):
     """Set random seed.
 
@@ -22,4 +23,4 @@ def set_random_seed(seed=22, n_threads=16):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.set_num_threads(n_threads)
-    os.environ['PYTHONHASHSEED'] = str(seed) 
+    os.environ["PYTHONHASHSEED"] = str(seed)
